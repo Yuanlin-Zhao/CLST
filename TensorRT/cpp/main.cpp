@@ -1,6 +1,6 @@
-#include "RERTCRACKSEG.h"
+#include "CLST.h"
 
-#pragma comment(lib, "./RERTCRACKSEG.lib")
+#pragma comment(lib, "./CLST.lib")
 std::string labels_txt_file = "";
 std::vector<std::string> readClassNames();
 std::vector<std::string> readClassNames()
@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
 	std::string enginefile = "";
 	cv::VideoCapture cap("");
 	cv::Mat frame;
-	auto detector = std::make_shared<RERT_CRACKSEG>();
+	auto detector = std::make_shared<CLST>();
 	detector->initConfig(enginefile, 0.25, 0.25);
 	std::vector<DetectResult> results;
 	while (true) {
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
 			cv::Rect box = dr.box;
 			cv::putText(frame, labels[dr.classId] + std::to_string(dr.conf), cv::Point(box.tl().x, box.tl().y - 10), cv::FONT_HERSHEY_SIMPLEX, .5, cv::Scalar(0, 0, 0));
 		}
-		cv::imshow("RERTCRACKSEG + TensorRT 实例分割演示", frame);
+		cv::imshow("CLST + TensorRT 实例分割演示", frame);
 		char c = cv::waitKey(1);
 		if (c == 27) { // ESC 退出
 			break;
