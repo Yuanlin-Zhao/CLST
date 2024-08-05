@@ -358,4 +358,12 @@ class Location(nn.Module):
         y = self.cv2(torch.cat(y, 1))
 
         return y
+from ultralytics.nn.modules import C2f
+class CrackBottleNeck(nn.Module):
+    def __init__(self, c1, c2, k=1, s=1, n=1, p=None, g=1, d=1, short=False):
+        super().__init__()
+        self.downconv = Conv(c1=c1, c2=c2, k=k, s=s, g=g, d=d, act=True)
+        self.bottleneck = C2f(c2, c2, n, short)
 
+    def forward(self, x):
+        return self.bottleneck(self.downconv(x))
