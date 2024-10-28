@@ -129,91 +129,11 @@ class RepConv(nn.Module):
         if hasattr(self, 'id_tensor'):
             self.__delattr__('id_tensor')
 
-class RepBlock(nn.Module):
-    def __init__(self, inplanes, planes):
-        super(RepBlock, self).__init__()
-
-        self.conv1 = Conv(inplanes, planes * 2, k=1, s=1)
-        self.conv2 = RepConv(planes * 2, planes * 2, k=3)
-
-        self.outconv = nn.Conv2d(planes * 2, planes, kernel_size=3, stride=2, padding=6, dilation=6)
-
-        self.inconv = nn.Sequential(nn.Conv2d(inplanes, planes * 2, kernel_size=1, stride=1),
-                                    nn.BatchNorm2d(planes * 2),
-                                    nn.GELU())
-
-    def forward(self, x):
-        identity = x
-        identity = self.inconv(identity)
-        out = self.conv1(x)
-        out = self.conv2(out)
-        out += identity
-        out = self.outconv(out)
-        return out
 
 
-class SplitTransformerLayer(nn.Module):
-    def __init__(self, c, num_heads):
-        super().__init__()
 
-        self.q = nn.Linear(c // 4, c // 4, bias=False)
-        self.k = nn.Linear(c // 4, c // 4, bias=False)
-        self.v = nn.Linear(c // 4, c // 4, bias=False)
-        self.ma = nn.MultiheadAttention(embed_dim=c // 4, num_heads=num_heads)
-        self.fc1 = nn.Linear(c, c, bias=False)
-        self.fc2 = nn.Linear(c, c, bias=False)
-        self.bnSplit = nn.BatchNorm1d(c // 4)
-        self.actSplit = nn.GELU()
-        self.bn = nn.BatchNorm1d(c)
-        self.act = nn.GELU()
+from timm.models.layers import DropPath
 
-    def forward(self, x):
-        SplitC = x.size()[2] // 4
-
-        x1, x2, x3, x4 = torch.split(x, [SplitC, SplitC, SplitC, SplitC], dim=2)
-
-        "Four-way multi-head processing"
-        x1 = self.actSplit(self.bnSplit(self.ma(self.q(x1), self.k(x1), self.v(x1))[0].permute(0, 2, 1))).permute(0, 2, 1) + x1
-        x2 = self.actSplit(self.bnSplit(self.ma(self.q(x2), self.k(x2), self.v(x2))[0].permute(0, 2, 1))).permute(0, 2, 1) + x2
-        x3 = self.actSplit(self.bnSplit(self.ma(self.q(x3), self.k(x3), self.v(x3))[0].permute(0, 2, 1))).permute(0, 2, 1) + x3
-        x4 = self.actSplit(self.bnSplit(self.ma(self.q(x4), self.k(x4), self.v(x4))[0].permute(0, 2, 1))).permute(0, 2, 1) + x4
-
-        x = torch.cat([x1, x2, x3, x4], dim=2)
-
-        return self.fc2(self.fc1(x)) + x
-
-class CrackLayer(nn.Module):
-    def __init__(self, c1, c2):
-        super().__init__()
-        self.input_dim = c1
-        self.output_dim = c2
-        self.norm = nn.LayerNorm(c1)
-        self.ST = SplitTransformerLayer(c1 // 4, 4)
-        self.proj = nn.Linear(c2, c2)
-        self.skip_scale = nn.Parameter(torch.ones(1))
-
-    def forward(self, x):
-
-        B, C = x.shape[:2]
-        assert C == self.input_dim
-        n_tokens = x.shape[2:].numel()
-        img_dims = x.shape[2:]
-        x_flat = x.reshape(B, C, n_tokens).transpose(-1, -2)
-        x_norm = self.norm(x_flat)
-
-        x1, x2, x3, x4 = torch.chunk(x_norm, 4, dim=2)
-        x_ST1 = self.ST(x1) + self.skip_scale * x1
-        x_ST2 = self.ST(x2) + self.skip_scale * x2
-        x_ST3 = self.ST(x3) + self.skip_scale * x3
-        x_ST4 = self.ST(x4) + self.skip_scale * x4
-        x_ST = torch.cat([x_ST1, x_ST2, x_ST3, x_ST4], dim=2)
-
-        x_ST = self.norm(x_ST)
-        x_ST = self.proj(x_ST)
-
-        out = x_ST.transpose(-1, -2).reshape(B, self.output_dim, *img_dims)
-
-        return out
 
 class DSPPF(nn.Module):
 
@@ -264,8 +184,6 @@ class RepCrackFormer(nn.Module):
 
         return x
 
-
-
 ##############################################################Neck#######################################################
 
 class CrackConv(nn.Module):
@@ -287,83 +205,3 @@ class CrackConv(nn.Module):
 
         return self.act(self.conv(x))
 
-class h_sigmoid(nn.Module):
-    def __init__(self, inplace=True):
-        super(h_sigmoid, self).__init__()
-
-        self.relu = nn.ReLU6(inplace=inplace)
-
-    def forward(self, x):
-
-        return self.relu(x + 3) / 6
-
-class h_swish(nn.Module):
-    def __init__(self, inplace=True):
-        super(h_swish, self).__init__()
-
-        self.sigmoid = h_sigmoid(inplace=inplace)
-
-    def forward(self, x):
-
-        return x * self.sigmoid(x)
-
-class CoordinateModule(nn.Module):
-    def __init__(self, inp, reduction=32):
-        super(CoordinateModule, self).__init__()
-
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-
-        mip = max(8, inp // reduction)
-
-        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
-        self.bn1 = nn.BatchNorm2d(mip)
-        self.act = h_swish()
-
-        self.conv_h = nn.Conv2d(mip, inp, kernel_size=1, stride=1, padding=0)
-        self.conv_w = nn.Conv2d(mip, inp, kernel_size=1, stride=1, padding=0)
-
-    def forward(self, x):
-
-        identity = x
-
-        n, c, h, w = x.size()
-        x_h = self.pool_h(x)
-        x_w = self.pool_w(x).permute(0, 1, 3, 2)
-
-        y = torch.cat([x_h, x_w], dim=2)
-        y = self.conv1(y)
-        y = self.bn1(y)
-        y = self.act(y)
-
-        x_h, x_w = torch.split(y, [h, w], dim=2)
-        x_w = x_w.permute(0, 1, 3, 2)
-
-        a_h = self.conv_h(x_h).sigmoid()
-        a_w = self.conv_w(x_w).sigmoid()
-
-        out = identity * a_w * a_h
-
-        return out
-class Location(nn.Module):
-    def __init__(self, c1, c2, n=1, e=0.5):
-        super().__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c2, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.ModuleList(CoordinateModule(self.c) for _ in range(n))
-    def forward(self, x):
-        y = list(self.cv1(x).chunk(2, 1))
-        y.extend(m(y[-1]) for m in self.m)
-        y = self.cv2(torch.cat(y, 1))
-
-        return y
-from ultralytics.nn.modules import C2f
-class CrackBottleNeck(nn.Module):
-    def __init__(self, c1, c2, k=1, s=1, n=1, p=None, g=1, d=1, short=False):
-        super().__init__()
-        self.downconv = Conv(c1=c1, c2=c2, k=k, s=s, g=g, d=d, act=True)
-        self.bottleneck = C2f(c2, c2, n, short)
-
-    def forward(self, x):
-        return self.bottleneck(self.downconv(x))
